@@ -10,7 +10,11 @@
 /// As torch may change the header inclusion conventions, it is better to manage
 /// it in a consistent way.
 #if TORCH_MAJOR_VERSION >= 1
+// edaroute: Limbo's assert_msg macro would swallow PyTorch's aten::assert_msg symbol, so hide it while torch is read.
+#pragma push_macro("assert_msg")
+#undef assert_msg
 #include <torch/extension.h>
+#pragma pop_macro("assert_msg")
 
 #if TORCH_MINOR_VERSION >= 3
 
@@ -26,17 +30,12 @@
 
 #endif
 
-#if TORCH_MAJOR_VERSION > 1 || (TORCH_MAJOR_VERSION == 1 && TORCH_MINOR_VERSION >= 8)
-
+// edaroute: one case for every PyTorch version. PyTorch 2 dropped the AT_PRIVATE_CASE_TYPE form used here.
 #define DREAMPLACE_PRIVATE_CASE_TYPE(NAME, enum_type, type, ...) \
-  AT_PRIVATE_CASE_TYPE(NAME, enum_type, type, __VA_ARGS__)
-
-#else
-
-#define DREAMPLACE_PRIVATE_CASE_TYPE(NAME, enum_type, type, ...) \
-  AT_PRIVATE_CASE_TYPE(enum_type, type, __VA_ARGS__)
-
-#endif
+  case enum_type: {                                             \
+    using scalar_t = type;                                      \
+    return __VA_ARGS__();                                       \
+  }
 
 #else
 

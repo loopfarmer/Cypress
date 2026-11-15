@@ -33,6 +33,30 @@ add_definitions(-D_GLIBCXX_USE_CXX11_ABI=${CMAKE_CXX_ABI})
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# Bundled libraries ask for CMake 2.8 behaviour, which CMake 4 no longer offers.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
+# macOS: the system bison (2.3) is too old and there's no FlexLexer.h, so use Homebrew's bison, flex and libomp.
+if(APPLE)
+  foreach(prefix /opt/homebrew /usr/local)
+    if(NOT BISON_EXECUTABLE AND EXISTS ${prefix}/opt/bison/bin/bison)
+      set(BISON_EXECUTABLE ${prefix}/opt/bison/bin/bison CACHE FILEPATH "bison 3.3 or later" FORCE)
+    endif()
+    if(NOT FLEX_EXECUTABLE AND EXISTS ${prefix}/opt/flex/bin/flex)
+      set(FLEX_EXECUTABLE ${prefix}/opt/flex/bin/flex CACHE FILEPATH "flex" FORCE)
+      set(FLEX_INCLUDE_DIR ${prefix}/opt/flex/include CACHE PATH "folder holding FlexLexer.h" FORCE)
+    endif()
+    if(NOT OpenMP_ROOT AND EXISTS ${prefix}/opt/libomp)
+      set(OpenMP_ROOT ${prefix}/opt/libomp)
+    endif()
+  endforeach()
+endif()
+
+# Clang treats `register`, still used in lemon's random.h, as an error under C++17.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-register>)
+endif()
+
 # for CUDA, must be put before finding PyTorch  
 # link dynamic libraries rather than static ones 
 set(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
@@ -46,7 +70,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 include(cmake/TorchExtension.cmake)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # without this, clang will complain about linking 

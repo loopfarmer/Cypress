@@ -1,6 +1,7 @@
 [submodule "thirdparty/Limbo"]
 	path = thirdparty/Limbo
-	url = https://github.com/limbo018/Limbo.git
+	url = https://github.com/loopfarmer/Limbo.git
+	branch = cypress
 [submodule "thirdparty/munkres-cpp"]
 	path = thirdparty/munkres-cpp
 	url = https://github.com/saebyn/munkres-cpp.git

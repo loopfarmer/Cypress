@@ -1,3 +1,4 @@
+#include <random>
 /**
  * @file   global_swap_concurrent.cpp
  * @author Yibo Lin
@@ -609,7 +610,7 @@ int globalSwapCPULauncher(DetailedPlaceDB<T> db, int batch_size, int max_iters,
   dreamplacePrint(kINFO, "initial hpwl = %.3f\n", hpwls[0]);
   for (int iter = 0; iter < max_iters; ++iter) {
     iter_time_start = CPUTimer::getGlobaltime();
-    std::random_shuffle(state.ordered_nodes.begin(), state.ordered_nodes.end());
+    std::shuffle(state.ordered_nodes.begin(), state.ordered_nodes.end(), std::mt19937(std::random_device{}()));
     global_swap(db, state);
     iter_time_stop = CPUTimer::getGlobaltime();
     dreamplacePrint(
