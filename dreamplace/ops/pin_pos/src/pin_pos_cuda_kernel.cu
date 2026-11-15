@@ -102,7 +102,9 @@ __global__ void computeNodeGrad(
             gx += grad_out_x[pin_id]; 
             gy += grad_out_y[pin_id]; 
 			T px_pt = cos_theta * (hi/2 - pin_offset_y[pin_id]) + sin_theta * (wi/2 - pin_offset_x[pin_id]);
-			T py_pt = cos_theta * (pin_offset_x[pin_id] - wi/2) + sin_theta * (pin_offset_y[pin_id] - hi/2);
+			// edaroute: d pin_y / d theta = (ofx - w/2) cos(theta) - (ofy - h/2) sin(theta); upstream had + for the
+			// second term, which is wrong exactly at 90 and 270 degrees.
+			T py_pt = cos_theta * (pin_offset_x[pin_id] - wi/2) + sin_theta * (hi/2 - pin_offset_y[pin_id]);
 			gt += grad_out_x[pin_id] * px_pt + grad_out_y[pin_id] * py_pt;
         }
 	}

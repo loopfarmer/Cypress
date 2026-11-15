@@ -47,7 +47,7 @@ class PinPosOpTest(unittest.TestCase):
     def test_pin_pos_random(self):
         dtype = torch.float32
         pos = np.array([[1, 10], [2, 20], [3, 30]], dtype=np.float32)
-        node2pin_map = np.array([np.array([0, 4]), np.array([1, 2, 3])])
+        node2pin_map = np.array([np.array([0, 4]), np.array([1, 2, 3])], dtype=object)  # edaroute: ragged, for NumPy 2
         num_physical_nodes = len(node2pin_map)
         num_pins = 0
         for pins in node2pin_map:
@@ -103,7 +103,10 @@ class PinPosOpTest(unittest.TestCase):
             pin2node_map=torch.from_numpy(pin2node_map),
             flat_node2pin_map=torch.from_numpy(flat_node2pin_map),
             flat_node2pin_start_map=torch.from_numpy(flat_node2pin_start_map),
-            num_physical_nodes=num_physical_nodes)
+            num_physical_nodes=num_physical_nodes,
+            # edaroute: upstream's op takes sizes and an orientation since rotation; theta = 0 is unrotated
+            h=torch.ones(num_physical_nodes), w=torch.ones(num_physical_nodes),
+            best_theta=torch.zeros(num_physical_nodes))
         result = custom.forward(pos_var)
         custom_loss = result.sum()
         print("custom = ", result)
@@ -129,7 +132,9 @@ class PinPosOpTest(unittest.TestCase):
                 flat_node2pin_map=torch.from_numpy(flat_node2pin_map).cuda(),
                 flat_node2pin_start_map=torch.from_numpy(
                     flat_node2pin_start_map).cuda(),
-                num_physical_nodes=num_physical_nodes)
+                num_physical_nodes=num_physical_nodes,
+                h=torch.ones(num_physical_nodes).cuda(), w=torch.ones(num_physical_nodes).cuda(),
+                best_theta=torch.zeros(num_physical_nodes).cuda())
             result_cuda = custom_cuda.forward(pos_var.cuda())
             custom_cuda_loss = result_cuda.sum()
             print("custom_cuda_result = ", result_cuda.data.cpu())
@@ -144,6 +149,57 @@ class PinPosOpTest(unittest.TestCase):
                                        grad.data.numpy(),
                                        rtol=1e-6,
                                        atol=1e-6)
+
+
+class PinPosRotationTest(unittest.TestCase):
+    """edaroute: rotation about each part's centre, and its position and angle gradients against finite differences."""
+
+    def setUp(self):
+        torch.manual_seed(0)
+        self.nodes, self.phys = 7, 5                    # the last 2 are fillers, with no pins
+        pins_per = [3, 1, 4, 2, 2]
+        self.pin2node = torch.tensor([n for n, k in enumerate(pins_per) for _ in range(k)], dtype=torch.long)
+        P = len(self.pin2node)
+        self.w = torch.rand(self.nodes, dtype=torch.double) * 10 + 2
+        self.h = torch.rand(self.nodes, dtype=torch.double) * 6 + 1
+        self.ofx = torch.rand(P, dtype=torch.double) * self.w[self.pin2node]
+        self.ofy = torch.rand(P, dtype=torch.double) * self.h[self.pin2node]
+        self.flat = torch.arange(P, dtype=torch.int32)
+        self.start = torch.tensor([0] + torch.cumsum(torch.tensor(pins_per + [0, 0]), 0).tolist(), dtype=torch.int32)
+        self.pos = torch.rand(2 * self.nodes, dtype=torch.double) * 100
+
+    def pins(self, pos, theta):
+        return pin_pos.PinPosFunction.apply(pos, self.ofx, self.ofy, theta, self.pin2node, self.flat, self.start,
+                                            self.phys, self.h, self.w)
+
+    def devices(self):
+        return ["cpu"] + (["cuda"] if torch.cuda.device_count() else [])
+
+    def test_gradients(self):
+        for device in self.devices():
+            for theta in [torch.rand(self.phys, dtype=torch.double) * 2 * np.pi,
+                          torch.tensor([0, 1, 2, 3, 1], dtype=torch.double) * np.pi / 2]:
+                args = [t.to(device) for t in (self.ofx, self.ofy, self.pin2node, self.flat, self.start)]
+                f = lambda p, t: pin_pos.PinPosFunction.apply(p, args[0], args[1], t, args[2], args[3], args[4],
+                                                              self.phys, self.h.to(device), self.w.to(device))
+                pos = self.pos.to(device).requires_grad_()
+                self.assertTrue(torch.autograd.gradcheck(f, (pos, theta.to(device).requires_grad_()),
+                                                         eps=1e-6, atol=1e-6))
+
+    def test_unrotated_is_exact(self):
+        out = self.pins(self.pos, torch.zeros(self.phys, dtype=torch.double))
+        n = self.nodes
+        ref = torch.cat([self.pos[:n][self.pin2node] + self.ofx, self.pos[n:][self.pin2node] + self.ofy])
+        self.assertTrue(torch.equal(out, ref))
+
+    def test_quarter_turn(self):
+        theta = torch.zeros(self.phys, dtype=torch.double)
+        theta[0] = np.pi / 2
+        out, P, n = self.pins(self.pos, theta), len(self.pin2node), self.nodes
+        cx, cy = self.pos[0] + self.w[0] / 2, self.pos[n] + self.h[0] / 2
+        for k in range(3):                               # node 0's pins
+            self.assertAlmostEqual(float(out[k]), float(cx - (self.ofy[k] - self.h[0] / 2)), places=9)
+            self.assertAlmostEqual(float(out[P + k]), float(cy + (self.ofx[k] - self.w[0] / 2)), places=9)
 
 
 if __name__ == '__main__':
