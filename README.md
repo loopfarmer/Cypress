@@ -2,7 +2,7 @@
 
 This is a fork of [NVlabs/Cypress](https://github.com/NVlabs/Cypress), which hasn't moved since its ISPD 2025 release. It's kept for [edaroute](https://github.com/loopfarmer/edaroute) and changes Cypress in three ways:
 
-- **Current software:** it builds and runs on PyTorch 2, Python 3.11 or later, NumPy 2 and C++17.
+- **Current software:** it builds and runs on PyTorch 2 (tested on 2.5 and 2.15), Python 3.11 or later, NumPy 2 and C++20.
 - **Macs:** it builds on macOS, including Apple silicon, CPU-only.
 - **CPU ops:** the CPU pin-position and net-crossing ops have caught up with the CUDA ones. Their CPU versions had fallen behind and no longer ran.
 
@@ -24,13 +24,14 @@ CMake finds Homebrew's bison, flex and libomp by itself.
 
 ```bash
 cd install
-DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib KMP_DUPLICATE_LIB_OK=TRUE ../.venv/bin/python dreamplace/Placer.py config.json
+DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib ../.venv/bin/python dreamplace/Placer.py config.json
 ```
 
 Set `"gpu": 0` in the config.
 
 - **`DYLD_FALLBACK_LIBRARY_PATH`** lets cairocffi find Homebrew's cairo. macOS strips it from any program under `/usr/bin`, so don't run the placer through `/usr/bin/time`.
-- **`KMP_DUPLICATE_LIB_OK`** is needed because PyTorch and Homebrew each load an OpenMP runtime.
+
+The ops are compiled with Homebrew's OpenMP headers but use PyTorch's OpenMP runtime, so only one runtime is ever loaded. Two runtimes deadlock with PyTorch 2.15, and hang at exit with 2.5.
 
 ### Limits on CPU
 

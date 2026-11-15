@@ -372,10 +372,3 @@ if __name__ == "__main__":
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # copy DREAMPlace.log to result directory
     os.system("cp %s/DREAMPlace.log %s" % (root_dir, res_path))
-
-    # edaroute: on macOS, PyTorch's OpenMP runtime and Homebrew's libomp (linked by the C++ ops) are both loaded,
-    # and the interpreter hangs at exit while they shut down. Every result is written by now, so leave directly.
-    logging.shutdown()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(0)

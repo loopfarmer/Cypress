@@ -70,7 +70,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 include(cmake/TorchExtension.cmake)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # without this, clang will complain about linking 
@@ -78,6 +78,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set_property(GLOBAL PROPERTY POSITION_INDEPENDENT_CODE TRUE)
 
 find_package(OpenMP REQUIRED)
+# macOS: PyTorch ships and loads its own libomp. Linking Homebrew's as well puts two OpenMP runtimes in one
+# process, whose thread pools deadlock (PyTorch 2.15) or hang the interpreter at exit (PyTorch 2.5). So compile
+# with Homebrew's OpenMP headers but link no libomp, and let the ops' OpenMP symbols resolve at load time to the
+# runtime PyTorch has already loaded. PyTorch's libomp can't be linked directly: its install name can be a
+# path that doesn't exist (/opt/llvm-openmp/lib/libomp.dylib in PyTorch 2.15).
+if(APPLE AND EXISTS "${TORCH_INSTALL_PREFIX}/lib/libomp.dylib")
+  message(STATUS "OpenMP: using PyTorch's runtime from ${TORCH_INSTALL_PREFIX}/lib")
+  foreach(lang C CXX)
+    if(TARGET OpenMP::OpenMP_${lang})
+      set_property(TARGET OpenMP::OpenMP_${lang} PROPERTY INTERFACE_LINK_LIBRARIES "")
+      set_property(TARGET OpenMP::OpenMP_${lang} APPEND PROPERTY INTERFACE_LINK_OPTIONS "LINKER:-undefined,dynamic_lookup")
+    endif()
+  endforeach()
+endif()
 #find_program(PYTHON "python" REQUIRED)
 find_package(ZLIB REQUIRED)
 set(Boost_NO_BOOST_CMAKE TRUE)
