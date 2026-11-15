@@ -1014,8 +1014,12 @@ class PlaceDB(object):
         self.num_btm_phy_nodes = self.num_btm_movable_nodes + self.num_btm_fixed_nodes
         self.top_fixed_nodes_idx = np.where(self.top_nodes_idx >= self.num_movable_nodes)[0]
         self.btm_fixed_nodes_idx = np.where(self.btm_nodes_idx >= self.num_movable_nodes)[0]
-        self.top_movable_macro_mask = self.movable_macro_mask[self.top_nodes_idx]
-        self.btm_movable_macro_mask = self.movable_macro_mask[self.btm_nodes_idx]
+        # edaroute: the mask covers movable nodes only, and the side indices cover fixed ones too, so a design with any
+        # fixed part indexed past its end. None of the released benchmarks has a fixed part. Fixed parts aren't macros.
+        mask = np.concatenate([self.movable_macro_mask,
+                               np.zeros(len(self.node_side_flag) - len(self.movable_macro_mask), dtype=bool)])
+        self.top_movable_macro_mask = mask[self.top_nodes_idx]
+        self.btm_movable_macro_mask = mask[self.btm_nodes_idx]
 
     def initialize(self, params):
         """
