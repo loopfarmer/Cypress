@@ -6,6 +6,8 @@
  */
 #include "utility/src/torch.h"
 #include "utility/src/utils.h"
+#include <limits>
+#include <vector>
 
 DREAMPLACE_BEGIN_NAMESPACE
 
@@ -18,10 +20,27 @@ void computeNetCrossingLauncher(const T* x, const T* y, const int* flat_netpin,
                                T *lambda_, T *mu_, T *sigma_,
                                T *grad_intermediate_x, T *grad_intermediate_y,
                                int num_threads) {
-#pragma omp parallel for num_threads(num_threads)
+  // edaroute: a pair can only score where t and u are within [-0.5, 1.5], so each segment's reach is its own box grown
+  // by half its length each way. A net's reach is the union over its segments; nets whose reaches miss can't score.
+  // This also drops far-apart collinear segments, which the formula gives t = u = 0 and so 0.25 each, with no gradient.
+  std::vector<T> reach(4 * num_nets);
+  for (int i = 0; i < num_nets; ++i) {
+    T lx = std::numeric_limits<T>::max(), ly = lx, hx = -lx, hy = -lx;
+    int src = flat_netpin[netpin_start[i]];
+    for (int k = netpin_start[i] + 1; k < netpin_start[i + 1]; ++k) {
+      int snk = flat_netpin[k];
+      T hw = std::abs(x[snk] - x[src]) / 2, hh = std::abs(y[snk] - y[src]) / 2;
+      lx = std::min(lx, std::min(x[src], x[snk]) - hw); hx = std::max(hx, std::max(x[src], x[snk]) + hw);
+      ly = std::min(ly, std::min(y[src], y[snk]) - hh); hy = std::max(hy, std::max(y[src], y[snk]) + hh);
+    }
+    reach[4 * i] = lx; reach[4 * i + 1] = ly; reach[4 * i + 2] = hx; reach[4 * i + 3] = hy;
+  }
+#pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8)
   for (int i = 0; i < num_nets; ++i) {
     for (int j = i + 1; j < num_nets; ++j) {
       if (!net_mask[i] || !net_mask[j]) continue;
+      if (reach[4 * i] > reach[4 * j + 2] || reach[4 * j] > reach[4 * i + 2]
+          || reach[4 * i + 1] > reach[4 * j + 3] || reach[4 * j + 1] > reach[4 * i + 3]) continue;
 
       // skip if net i/j has only one pin
       if (netpin_start[i + 1] - netpin_start[i] <= 1 || netpin_start[j + 1] - netpin_start[j] <= 1) {
@@ -53,6 +72,8 @@ void computeNetCrossingLauncher(const T* x, const T* y, const int* flat_netpin,
           T epsilon = 1e-5;
           T t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / ((x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4) + epsilon);
           T u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / ((x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4) + epsilon);
+          // edaroute: the bell is zero, with zero slope, outside |x| <= 1, so this pair adds nothing. Skip its gradient and atomics.
+          if (std::abs(t - 0.5) > 1 || std::abs(u - 0.5) > 1) continue;
 
           // std::cout << "custom t: " << t << " u: " << u << "\n";
 

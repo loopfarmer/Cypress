@@ -12,6 +12,27 @@
 
 DREAMPLACE_BEGIN_NAMESPACE
 
+// edaroute: a pair can only score where t and u are within [-0.5, 1.5], so each segment's reach is its own box grown by
+// half its length each way. A net's reach is the union over its segments, as {xl, yl, xh, yh}. This also drops
+// far-apart collinear segments, which the formula gives t = u = 0 and so 0.25 each, with no gradient.
+template <typename T>
+__device__ void netReach(const T* x, const T* y, const int* flat_netpin, const int* netpin_start, int net, T* r)
+{
+    int src = flat_netpin[netpin_start[net]];
+    r[0] = r[1] = FLT_MAX;
+    r[2] = r[3] = -FLT_MAX;
+    for (int k = netpin_start[net] + 1; k < netpin_start[net + 1]; ++k) {
+        int snk = flat_netpin[k];
+        T hw = fabs(x[snk] - x[src]) / 2, hh = fabs(y[snk] - y[src]) / 2;
+        T lx = (x[src] < x[snk] ? x[src] : x[snk]) - hw, hx = (x[src] > x[snk] ? x[src] : x[snk]) + hw;
+        T ly = (y[src] < y[snk] ? y[src] : y[snk]) - hh, hy = (y[src] > y[snk] ? y[src] : y[snk]) + hh;
+        if (lx < r[0]) r[0] = lx;
+        if (ly < r[1]) r[1] = ly;
+        if (hx > r[2]) r[2] = hx;
+        if (hy > r[3]) r[3] = hy;
+    }
+}
+
 template <typename T> // choose diff bell functions
 __global__ void computeNetCrossing(
         const T* x, const T* y, 
@@ -34,6 +55,11 @@ __global__ void computeNetCrossing(
     if (!net_mask[i] || !net_mask[j]) return; // skip masked nets
     // skip if net i/j has only one pin
     if (netpin_start[i+1] - netpin_start[i] <= 1 || netpin_start[j+1] - netpin_start[j] <= 1) return;
+    // edaroute: skip nets whose reaches miss, as the CPU op does (see netReach).
+    T ri[4], rj[4];
+    netReach(x, y, flat_netpin, netpin_start, i, ri);
+    netReach(x, y, flat_netpin, netpin_start, j, rj);
+    if (ri[0] > rj[2] || rj[0] > ri[2] || ri[1] > rj[3] || rj[1] > ri[3]) return;
     for (int net_i_sink_pin_idx = netpin_start[i] + 1; net_i_sink_pin_idx < netpin_start[i + 1]; ++net_i_sink_pin_idx) {
         int net_i_src_pin_id = flat_netpin[netpin_start[i]];
         int net_i_sink_pin_id = flat_netpin[net_i_sink_pin_idx];
@@ -66,6 +92,8 @@ __global__ void computeNetCrossing(
             T epsilon = 1e-5;
             T t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / ((x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4) + epsilon);          
             T u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / ((x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4) + epsilon);
+            // edaroute: the bell is zero, with zero slope, outside |x| <= 1, so this pair adds nothing. Skip its gradient and atomics.
+            if (fabs(t - 0.5) > 1 || fabs(u - 0.5) > 1) continue;
 
             // Bell function
             // lambda = 2, mu = 2, sigma = 1
@@ -82,7 +110,8 @@ __global__ void computeNetCrossing(
                 }
             };
 
-            net_crossing[i] += bell(t - 0.5) * bell(u - 0.5);
+            // edaroute: atomic, since every thread with this i adds to it; upstream's plain += raced.
+            atomicAdd(net_crossing + i, bell(t - 0.5) * bell(u - 0.5));
 
             // compute gradient
             auto bell_gradient = [&](T x) {

@@ -1,10 +1,11 @@
 # Cypress, maintained
 
-This is a fork of [NVlabs/Cypress](https://github.com/NVlabs/Cypress), which hasn't moved since its ISPD 2025 release. It's kept for [edaroute](https://github.com/loopfarmer/edaroute) and changes Cypress in three ways:
+This is a fork of [NVlabs/Cypress](https://github.com/NVlabs/Cypress), which hasn't moved since its ISPD 2025 release. It's kept for [edaroute](https://github.com/loopfarmer/edaroute) and changes Cypress in four ways:
 
-- **Current software:** it builds and runs on PyTorch 2 (tested on 2.5 and 2.15), Python 3.11 or later, NumPy 2 and C++20.
+- **Current software:** it builds and runs on PyTorch 2, Python 3.11 or later, NumPy 2 and C++20. It's tested on PyTorch 2.15. On macOS, PyTorch 2.5 doesn't load the ops: its OpenMP runtime lacks `__kmpc_dispatch_deinit`, which Homebrew's OpenMP headers call.
 - **Macs:** it builds on macOS, including Apple silicon, CPU-only.
 - **CPU ops:** the CPU pin-position and net-crossing ops have caught up with the CUDA ones. Their CPU versions had fallen behind and no longer ran.
+- **Faster net crossing:** pairs of segments that can't score are skipped before their gradient and atomics, as are pairs of nets too far apart to touch. On CPU that's 29 times faster on 8 threads, with the same gradient and the same placements. The CUDA kernel has the same skips, and adds each net's score atomically, where upstream's plain add raced.
 
 The commit messages say what changed and why. Upstream's README follows below.
 
