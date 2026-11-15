@@ -243,6 +243,10 @@
         "description": "max_pin_opt_adjust_rate",
         "default": 1.5
     },
+    "legalize_max_overflow": {
+        "description": "legalize a global placement that ends above stop_overflow, up to this overflow; above it, or on divergence, placement fails",
+        "default": 0.07
+    },
     "deterministic_flag": {
         "description": "whether require run-to-run determinism, may have efficiency overhead",
         "default": 0

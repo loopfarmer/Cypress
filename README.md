@@ -8,6 +8,7 @@ This is a fork of [NVlabs/Cypress](https://github.com/NVlabs/Cypress), which has
 - **Rotation gradient:** upstream's CUDA kernel had the wrong sign in one term of the angle gradient, which is wrong exactly at 90° and 270°. Both ops now have it right; the CPU one is checked against finite differences.
 - **Faster net crossing:** pairs of segments that can't score are skipped before their gradient and atomics, as are pairs of nets too far apart to touch. On CPU that's 29 times faster on 8 threads, with the same gradient and the same placements. The CUDA kernel has the same skips, and adds each net's score atomically, where upstream's plain add raced.
 - **Faster CPU density map:** each thread adds into its own map, so the op scales past 4 threads.
+- **Stalled placements:** `legalize_max_overflow` lets the legalizer finish a global placement that stalled above `stop_overflow`, instead of failing it (see below).
 
 The commit messages say what changed and why. Upstream's README follows below.
 
@@ -42,7 +43,7 @@ The ops are compiled with Homebrew's OpenMP headers but use PyTorch's OpenMP run
 
 ### Known problems, on any device
 
-- **A failed placement looks like a result.** When global placement ends above `stop_overflow`, Cypress logs "placement failed", skips legalization and writes the design's own placement as its `.gp.pl`, then exits 0. With the default settings on CPU and one thread, 9 of the 20 released benchmarks do this.
+- **Placements that stall fail, unless you allow legalization.** On these boards global placement often stalls a little above `stop_overflow`, with small parts trapped inside large ones and identical parts stacked at one spot. Upstream then logs "placement failed", skips legalization, writes the design's own placement as its `.gp.pl` and exits 0. With the default settings on one thread, 9 of the 20 released benchmarks do this. The fork adds `legalize_max_overflow`: global placements that end at or below it are legalized anyway, and the macro legalizer resolves the overlaps. With it at 0.5, all 20 benchmarks place legally. The default, 0.07, keeps upstream's behaviour.
 - **Rotation barely searches.** `enable_rotation` is off by default upstream, and its search doesn't learn:
   - the orientation optimizer is `Adam` with `lr=0`, so the orientation logits never move, and the angle gradient goes unused;
   - from iteration 500, every 100 iterations it draws 100 random orientation sets. When one improves both wirelength and crossings, it keeps a fresh random draw, not the set it evaluated;

@@ -1109,8 +1109,11 @@ class NonLinearPlace(BasicPlace.BasicPlace):
             logging.info(cur_metric)
 
         # in case of significant divergence, no need to run legalizer
+        # edaroute: global placement on a PCB often stalls above stop_overflow with a few parts still overlapping
+        # (small parts inside large ones, identical parts stacked), which the macro legalizer can still resolve. So
+        # legalize up to legalize_max_overflow, and give up only above it or on divergence.
         if last_metric and (
-            last_metric.overflow[-1] > params.stop_overflow
+            last_metric.overflow[-1] > max(params.stop_overflow, params.legalize_max_overflow)
             or torch.isinf(last_metric.objective)
             or torch.isnan(last_metric.objective)
         ):
