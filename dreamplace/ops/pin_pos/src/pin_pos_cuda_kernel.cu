@@ -38,8 +38,11 @@ __global__ void computePinPos(
 		T sin_theta = std::sin(theta[node_id]);
 		T ofx = pin_offset_x[i];
 		T ofy = pin_offset_y[i];
-		pin_x[i] = (xi + wi/2) + (ofx - wi/2) * cos_theta - (ofy - hi/2) * sin_theta;
-		pin_y[i] = (yi + hi/2) + (ofx - wi/2) * sin_theta + (ofy - hi/2) * cos_theta;
+		// edaroute: (x, y) is the lower-left of the box as turned, as the legalizer and .pl files have it, so an odd
+		// quarter turn puts the centre at (x + h/2, y + w/2). Upstream used the unturned box.
+		bool odd = (llround(theta[node_id] / (T)(M_PI / 2)) & 1) != 0;
+		pin_x[i] = (xi + (odd ? hi : wi)/2) + (ofx - wi/2) * cos_theta - (ofy - hi/2) * sin_theta;
+		pin_y[i] = (yi + (odd ? wi : hi)/2) + (ofx - wi/2) * sin_theta + (ofy - hi/2) * cos_theta;
 	}
 }
 

@@ -243,6 +243,26 @@
         "description": "max_pin_opt_adjust_rate",
         "default": 1.5
     },
+    "rotation_learning_rate": {
+        "description": "with enable_rotation, Adam's learning rate for the orientation logits",
+        "default": 0.1
+    },
+    "rotation_search_start": {
+        "description": "with enable_rotation, the global placement iteration of the first orientation search",
+        "default": 500
+    },
+    "rotation_search_period": {
+        "description": "with enable_rotation, iterations between Gumbel-softmax orientation searches during global placement; 0 for none. Off by default: on the PCB benchmarks it made placements worse",
+        "default": 0
+    },
+    "rotation_search_steps": {
+        "description": "with enable_rotation, steps in each orientation search",
+        "default": 100
+    },
+    "rotation_greedy_passes": {
+        "description": "with enable_rotation, when global placement ends, passes giving each part the quarter turn that minimizes its nets' wirelength; 0 for none",
+        "default": 3
+    },
     "legalize_max_overflow": {
         "description": "legalize a global placement that ends above stop_overflow, up to this overflow; above it, or on divergence, placement fails",
         "default": 0.07

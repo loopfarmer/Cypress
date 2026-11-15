@@ -149,7 +149,9 @@ class PinPos(nn.Module):
         self.algorithm = algorithm
         self.orient_logits = orient_logits
         self.best_theta = best_theta
-        self.use_best_theta = False
+        # edaroute: start from the best orientations. Upstream started from a random draw, so the optimizer's first
+        # evaluations saw randomly turned parts, and turning rotation on changed the whole run.
+        self.use_best_theta = True
         self.h = h
         self.w = w
 

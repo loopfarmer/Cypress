@@ -196,7 +196,8 @@ class PinPosRotationTest(unittest.TestCase):
         theta = torch.zeros(self.phys, dtype=torch.double)
         theta[0] = np.pi / 2
         out, P, n = self.pins(self.pos, theta), len(self.pin2node), self.nodes
-        cx, cy = self.pos[0] + self.w[0] / 2, self.pos[n] + self.h[0] / 2
+        # (x, y) is the lower-left of the turned box, so a quarter turn's centre is (x + h/2, y + w/2)
+        cx, cy = self.pos[0] + self.h[0] / 2, self.pos[n] + self.w[0] / 2
         for k in range(3):                               # node 0's pins
             self.assertAlmostEqual(float(out[k]), float(cx - (self.ofy[k] - self.h[0] / 2)), places=9)
             self.assertAlmostEqual(float(out[P + k]), float(cy + (self.ofx[k] - self.w[0] / 2)), places=9)

@@ -609,7 +609,7 @@ class PlaceObj(nn.Module):
         # self.check_gradient(pos)
         if pos.grad is not None:
             pos.grad.zero_()
-        if orient_logits is not None:
+        if orient_logits is not None and orient_logits.grad is not None:  # edaroute: None before the first search step
             orient_logits.grad.zero_()
 
         obj = self.obj_fn(pos, orient_logits)

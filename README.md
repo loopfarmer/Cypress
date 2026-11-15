@@ -44,10 +44,11 @@ The ops are compiled with Homebrew's OpenMP headers but use PyTorch's OpenMP run
 ### Known problems, on any device
 
 - **Placements that stall fail, unless you allow legalization.** On these boards global placement often stalls a little above `stop_overflow`, with small parts trapped inside large ones and identical parts stacked at one spot. Upstream then logs "placement failed", skips legalization, writes the design's own placement as its `.gp.pl` and exits 0. With the default settings on one thread, 9 of the 20 released benchmarks do this. The fork adds `legalize_max_overflow`: global placements that end at or below it are legalized anyway, and the macro legalizer resolves the overlaps. With it at 0.5, all 20 benchmarks place legally. The default, 0.07, keeps upstream's behaviour.
-- **Rotation barely searches.** `enable_rotation` is off by default upstream, and its search doesn't learn:
-  - the orientation optimizer is `Adam` with `lr=0`, so the orientation logits never move, and the angle gradient goes unused;
-  - from iteration 500, every 100 iterations it draws 100 random orientation sets. When one improves both wirelength and crossings, it keeps a fresh random draw, not the set it evaluated;
-  - the first evaluations, before iteration 1, use random orientations too, so turning rotation on changes the whole run.
+- **Rotation searched badly upstream; the fork fixes it.** Upstream's search couldn't learn: its optimizer had `lr=0`, it kept a fresh random draw instead of the set it had tested, and it started placement from random orientations. It also put a turned part's centre at its unturned box's centre, (w - h)/2 from where the legalizer and the `.pl` file put it. In the fork:
+  - with `enable_rotation`, when global placement ends each part takes whichever quarter turn gives its nets the least wirelength, in passes until nothing changes (`rotation_greedy_passes`, default 3). On the 20 released benchmarks, one thread, that cuts wirelength by 3.3% on average (better on 16, worse on 4), and every result is legal;
+  - the pin-position ops use the turned box, as the legalizer and the files do;
+  - the Gumbel-softmax search during placement learns (`rotation_learning_rate`) and keeps the set it tested, but it still made placements worse, so it's off unless `rotation_search_period` is set.
+- **The preconditioner corrupts the pin counts.** `PlaceObj.PreconditionOp` adds the density term into `num_pins_in_nodes` in place on every call, so the counts grow without bound (small-1's from 172 to 2e9 over a run). Making it a copy is the obvious fix, but it made wirelength 18% worse on average over the 20 benchmarks: the tuned settings depend on it. So it's left as upstream has it, for now.
 
 ---
 

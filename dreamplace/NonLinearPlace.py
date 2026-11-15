@@ -59,6 +59,119 @@ class NonLinearPlace(BasicPlace.BasicPlace):
         """
         super(NonLinearPlace, self).__init__(params, placedb)
 
+    def choose_orientations(self, placedb, params, passes):
+        """
+        @brief edaroute: give each movable part whichever of its four quarter turns gives its nets the least weighted
+        half-perimeter wirelength, with every other part where it is. Passes repeat until no part changes, up to
+        `passes`. A part turns about its centre, so its box's lower-left corner moves when it turns between odd and
+        even quarter turns; the macro legalizer then legalizes the turned boxes. Nets above ignore_net_degree pins are
+        left out, as the wirelength op leaves them out.
+        @return number of parts whose orientation changed
+        """
+        n, m = placedb.num_nodes, placedb.num_movable_nodes
+        dc = self.data_collections
+        pos = self.pos[0].data
+        x, y = pos[:n].cpu().numpy().astype(np.float64), pos[n:2 * n].cpu().numpy().astype(np.float64)
+        w, h = placedb.node_size_x.astype(np.float64), placedb.node_size_y.astype(np.float64)
+        ofx, ofy = placedb.pin_offset_x.astype(np.float64), placedb.pin_offset_y.astype(np.float64)
+        choice = dc.best_orient_choice.cpu().numpy().astype(np.int64).copy()
+        net_weights = np.asarray(placedb.net_weights, dtype=np.float64)
+        degree = np.array([len(p) for p in placedb.net2pin_map])
+        counted = (degree >= 2) & (degree <= params.ignore_net_degree)
+        cos, sin = np.array([1, 0, -1, 0]), np.array([0, 1, 0, -1])
+
+        def centre(i, k):
+            return (x[i] + (h[i] if k % 2 else w[i]) / 2, y[i] + (w[i] if k % 2 else h[i]) / 2)
+
+        def pins_of(i, k, cx, cy):
+            p = placedb.node2pin_map[i]
+            ox, oy = ofx[p] - w[i] / 2, ofy[p] - h[i] / 2
+            return cx + ox * cos[k] - oy * sin[k], cy + ox * sin[k] + oy * cos[k]
+
+        px, py = np.zeros(len(ofx)), np.zeros(len(ofx))
+        for i in range(placedb.num_physical_nodes):
+            if len(placedb.node2pin_map[i]):
+                k = choice[i] if i < len(choice) else 0
+                px[placedb.node2pin_map[i]], py[placedb.node2pin_map[i]] = pins_of(i, k, *centre(i, k))
+
+        def cost(nets):
+            total = 0.0
+            for e in nets:
+                p = placedb.net2pin_map[e]
+                total += net_weights[e] * (px[p].max() - px[p].min() + py[p].max() - py[p].min())
+            return total
+
+        all_nets = np.flatnonzero(counted)
+        before, changed = cost(all_nets), 0
+        for _ in range(passes):
+            moved = 0
+            for i in range(m):
+                p = placedb.node2pin_map[i]
+                if not len(p):
+                    continue
+                nets = np.unique(placedb.pin2net_map[p])
+                nets = nets[counted[nets]]
+                if not len(nets):
+                    continue
+                cx, cy = centre(i, choice[i])
+                keep = (px[p].copy(), py[p].copy())
+                best_k, best_c = choice[i], cost(nets)
+                for k in range(4):
+                    if k == choice[i]:
+                        continue
+                    px[p], py[p] = pins_of(i, k, cx, cy)
+                    c = cost(nets)
+                    if c < best_c - 1e-9:
+                        best_k, best_c = k, c
+                if best_k != choice[i]:
+                    choice[i] = best_k
+                    x[i], y[i] = cx - (h[i] if best_k % 2 else w[i]) / 2, cy - (w[i] if best_k % 2 else h[i]) / 2
+                    px[p], py[p] = pins_of(i, best_k, cx, cy)
+                    moved += 1
+                else:
+                    px[p], py[p] = keep
+            changed += moved
+            if not moved:
+                break
+        pos[:m] = torch.from_numpy(x[:m]).to(pos)
+        pos[n:n + m] = torch.from_numpy(y[:m]).to(pos)
+        dc.best_orient_choice.copy_(torch.from_numpy(choice).to(dc.best_orient_choice))
+        dc.best_theta.copy_(dc.best_orient_choice.to(dc.best_theta.dtype) * (np.pi / 2))
+        logging.info("orientations chosen: wirelength %.6g -> %.6g, %d changes, %d parts turned"
+                     % (before, cost(all_nets), changed, int((choice[:m] != 0).sum())))
+        return changed
+
+    def search_orientations(self, model, pos, rot_optimizer, steps, iteration):
+        """
+        @brief edaroute: search part orientations with positions held still, keeping the best set it tests.
+        Each step samples a set of orientations from the logits (Gumbel-softmax), evaluates wirelength plus weighted
+        net crossings with it, and takes an Adam step on the logits along that objective's gradient. A sampled set is
+        kept when it beats the best so far, which starts as the current best orientations. Upstream kept a fresh
+        random draw instead of the set it had evaluated, and its lr=0 optimizer never moved the logits.
+        @return number of times a better set was kept
+        """
+        pin_pos_op = model.op_collections.pin_pos_op
+        model.freeze_pos = True
+        pin_pos_op.use_best_theta = True
+        with torch.no_grad():
+            best = float(model.obj_fn(pos, self.orient_logits))
+        start, kept = best, 0
+        pin_pos_op.use_best_theta = False
+        for _ in range(steps):
+            obj, _ = model.obj_and_grad_fn(pos, orient_logits=self.orient_logits)
+            theta = pin_pos_op.theta.detach().clone()
+            rot_optimizer.step()
+            if float(obj) < best:
+                best, kept = float(obj), kept + 1
+                choices = torch.round(theta / (np.pi / 2)).to(torch.int32) % 4
+                self.data_collections.best_orient_choice.copy_(choices)
+                self.data_collections.best_theta.copy_(choices * (np.pi / 2))
+        pin_pos_op.use_best_theta = True
+        model.freeze_pos = False
+        logging.info("orientation search at iteration %d: objective %.6g -> %.6g, kept %d of %d sets, %d parts turned"
+                     % (iteration, start, best, kept, steps, int((self.data_collections.best_orient_choice != 0).sum())))
+        return kept
+
     def __call__(self, params, placedb):
         """
         @brief Top API to solve placement.
@@ -134,7 +247,9 @@ class NonLinearPlace(BasicPlace.BasicPlace):
 
                 if params.enable_rotation:
                     # rot_optimizer = torch.optim.SGD(orient_logits, lr=0)
-                    rot_optimizer = torch.optim.Adam(orient_logits, lr=0)
+                    # edaroute: upstream's lr=0 never moved the logits, so the angle gradient went unused.
+                    rot_optimizer = torch.optim.Adam(orient_logits, lr=params.rotation_learning_rate)
+                    self.rotation_search_state = (model, rot_optimizer)
                     # rot_optimizer = NesterovAcceleratedGradientOptimizer.NesterovAcceleratedGradientOptimizer(
                     #     orient_logits,
                     #     lr=0,
@@ -398,33 +513,10 @@ class NonLinearPlace(BasicPlace.BasicPlace):
 
                     optimizer.zero_grad(set_to_none=False)  # edaroute: PyTorch 2 defaults to None, and the Nesterov step skips a None grad
 
-                    update_orient_cond = (
-                        iteration >= 500 and iteration % 100 == 0
-                    )
-                    
-                    if params.enable_rotation and update_orient_cond:
-                        best_wl, best_nc = model.wirelength.data, model.net_crossing.data
-                        for _ in range(100):
-                            model.op_collections.pin_pos_op.use_best_theta = False
-                            model.freeze_pos = True
-                            obj_rot, grad_rot = model.obj_and_grad_fn(pos, orient_logits=self.orient_logits)
-                            # with torch.no_grad():
-                                # grad_rot[1:,:] = 0
-                                # grad_rot = 0
-                            rot_optimizer.step()
-                            # with torch.no_grad():
-                                # self.orient_logits -= 1e-5 * grad_rot
-                            # if model.wirelength.data < best_wl or model.net_crossing.data < best_nc:
-                            if model.wirelength.data < best_wl and model.net_crossing.data < best_nc:
-                            # if model.wirelength.data < best_wl:
-                                logging.info("update best theta")
-                                self.update_best_theta()
-                                best_wl, best_nc = model.wirelength.data, model.net_crossing.data
-                            model.freeze_pos = False
-                            model.op_collections.pin_pos_op.use_best_theta = True
-                    else:
-                        model.op_collections.pin_pos_op.use_best_theta = True
-                        model.freeze_pos = False
+                    if params.enable_rotation and params.rotation_search_period > 0 and \
+                            iteration >= params.rotation_search_start and \
+                            (iteration - params.rotation_search_start) % params.rotation_search_period == 0:
+                        self.search_orientations(model, pos, rot_optimizer, params.rotation_search_steps, iteration)
 
                     # t1 = time.time()
                     cur_metric.evaluate(placedb, eval_ops, pos, model.data_collections)
@@ -1107,6 +1199,10 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                 placedb, {"hpwl": self.op_collections.hpwl_op}, self.pos[0]
             )
             logging.info(cur_metric)
+
+        # edaroute: choose each part's orientation on the final positions, exactly.
+        if params.enable_rotation and params.rotation_greedy_passes > 0:
+            self.choose_orientations(placedb, params, params.rotation_greedy_passes)
 
         # in case of significant divergence, no need to run legalizer
         # edaroute: global placement on a PCB often stalls above stop_overflow with a few parts still overlapping

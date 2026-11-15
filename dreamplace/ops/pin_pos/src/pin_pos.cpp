@@ -6,6 +6,7 @@
  */
 #include "utility/src/torch.h"
 #include "utility/src/utils.h"
+#include <cmath>
 
 DREAMPLACE_BEGIN_NAMESPACE
 
@@ -16,6 +17,10 @@ DREAMPLACE_BEGIN_NAMESPACE
 // A part at exactly theta = 0 takes the old pin_x = x + ofx, which is the same value without the rounding of the
 // centre form, so placements without rotation are unchanged bit for bit. theta covers the physical nodes; fillers have
 // no pins.
+// edaroute: (x, y) is the lower-left corner of the part's box as turned, as the macro legalizer and Bookshelf .pl files
+// have it. So a part at an odd quarter turn has its centre at (x + h/2, y + w/2), not (x + w/2, y + h/2). Upstream's
+// CUDA op used the unturned box, which put a turned part's pins (w - h)/2 away from where the legalizer and the output
+// file put them. The centre is constant for a given quarter turn, so the theta gradient doesn't change.
 
 template <typename T>
 int computePinPosLauncher(const T* x, const T* y, const T* pin_offset_x, const T* pin_offset_y, const T* theta,
@@ -31,8 +36,9 @@ int computePinPosLauncher(const T* x, const T* y, const T* pin_offset_x, const T
     } else {
       T c = std::cos(t), s = std::sin(t);
       T ox = pin_offset_x[i] - w[node_id] / 2, oy = pin_offset_y[i] - h[node_id] / 2;
-      pin_x[i] = (x[node_id] + w[node_id] / 2) + ox * c - oy * s;
-      pin_y[i] = (y[node_id] + h[node_id] / 2) + ox * s + oy * c;
+      bool odd = ((long)std::llround(t / T(M_PI / 2)) & 1) != 0;
+      pin_x[i] = (x[node_id] + (odd ? h[node_id] : w[node_id]) / 2) + ox * c - oy * s;
+      pin_y[i] = (y[node_id] + (odd ? w[node_id] : h[node_id]) / 2) + ox * s + oy * c;
     }
   }
   return 0;
