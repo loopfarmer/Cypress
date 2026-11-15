@@ -64,10 +64,13 @@ class PinPosFunction(Function):
     @staticmethod
     def backward(ctx, grad_pin_pos):
         # grad_pin_pos is not contiguous
-        if grad_pin_pos.is_cuda:
-            func = pin_pos_cuda.backward
-        else:
-            func = pin_pos_cpp.backward
+        if not grad_pin_pos.is_cuda:
+            # edaroute: the CPU op predates rotation, so it takes no theta, h or w and returns no theta gradient.
+            grad_pos = pin_pos_cpp.backward(grad_pin_pos.contiguous(), ctx.pos, ctx.pin_offset_x, ctx.pin_offset_y,
+                                            ctx.pin2node_map, ctx.flat_node2pin_map, ctx.flat_node2pin_start_map,
+                                            ctx.num_physical_nodes)
+            return grad_pos, None, None, None, None, None, None, None, None, None
+        func = pin_pos_cuda.backward
         output = func(grad_pin_pos.contiguous(), ctx.pos, ctx.pin_offset_x,
                       ctx.pin_offset_y, ctx.theta, ctx.pin2node_map,
                       ctx.flat_node2pin_map, ctx.flat_node2pin_start_map,
@@ -196,8 +199,11 @@ class PinPos(nn.Module):
                                             self.num_physical_nodes,
                                             self.h, self.w)
         else:
+            # edaroute: same arguments as the CUDA call; the CPU op ignores theta, h and w (no rotation on CPU).
             return PinPosFunction.apply(pos, self.pin_offset_x,
-                                        self.pin_offset_y, self.pin2node_map,
+                                        self.pin_offset_y, self.theta,
+                                        self.pin2node_map,
                                         self.flat_node2pin_map,
                                         self.flat_node2pin_start_map,
-                                        self.num_physical_nodes)
+                                        self.num_physical_nodes,
+                                        self.h, self.w)
