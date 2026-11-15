@@ -148,6 +148,18 @@ class PlaceDataCollection(object):
             self.pin_weights = (
                 self.flat_node2pin_start_map[1:] - self.flat_node2pin_start_map[:-1]
             ).to(self.node_size_x.dtype)
+            if params.segment_clearance_file:
+                # edaroute: the segments file's obstacle pins (one one-pin net per pad) are there to be measured, not
+                # wired: leave them out of each part's pin count, which the preconditioner divides steps by, so a
+                # design with them places as it would without them
+                import json
+                names = json.load(open(params.segment_clearance_file))["obstacles"]
+                name2id = {(k.decode() if isinstance(k, bytes) else str(k)): v for k, v in placedb.net_name2id_map.items()}
+                extra = np.zeros(len(self.pin_weights))
+                for nm in names:
+                    for pin in placedb.net2pin_map[name2id[nm]]:
+                        extra[placedb.pin2node_map[pin]] += 1
+                self.pin_weights -= torch.from_numpy(extra).to(self.pin_weights)
 
             self.unit_pin_capacity = torch.empty(
                 1, dtype=self.pos[0].dtype, device=device

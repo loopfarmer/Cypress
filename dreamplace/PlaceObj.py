@@ -427,6 +427,53 @@ class PlaceObj(nn.Module):
             self.build_update_net_crossing_weight(params, placedb)
         )
 
+        # edaroute: pins of other nets kept clear of RF hops and IC escapes (see ops/segment_clearance)
+        self.segment_clearance_weight = params.segment_clearance_weight
+        self.op_collections.segment_clearance_op = None
+        if params.segment_clearance_file:
+            from dreamplace.ops.segment_clearance.segment_clearance import SegmentClearance
+            sc = SegmentClearance(params.segment_clearance_file, placedb, self.data_collections.pos[0].device,
+                                  self.data_collections.pos[0].dtype)
+            pin_pos_op = self.op_collections.pin_pos_op
+            self.op_collections.segment_clearance_op = lambda pos: sc(pin_pos_op(pos))
+            self.segment_clearance_module = sc
+
+    def segment_terms_on(self):
+        """edaroute: the segment-clearance term, and with a segments file the net-crossing term, start once the parts
+        have spread: once overflow is below segment_terms_start_overflow. At the start of global placement every part
+        sits near the board's centre, where every segment has hundreds of pins inside its clearance and every RF net
+        crosses every other, and terms on that scatter the parts across the board for good."""
+        if getattr(self, "segment_terms_started", False):
+            return True
+        overflow = getattr(self, "overflow", None)
+        if overflow is None:
+            return False
+        if float(torch.as_tensor(overflow).max()) < self.params.segment_terms_start_overflow:
+            self.segment_terms_started = True
+            logging.info("segment terms start: overflow %.3f" % float(torch.as_tensor(overflow).max()))
+        return getattr(self, "segment_terms_started", False)
+
+    def scale_segment_terms(self, pos):
+        """edaroute: when the segment terms start, scale each so its weight is relative to wirelength: a weight of 1
+        pulls as hard, in total, as wirelength does there. Then a weight means the same on any board."""
+        if getattr(self, "segment_terms_scaled", False):
+            return
+        self.segment_terms_scaled = True
+        p = pos.detach().clone().requires_grad_(True)
+
+        def norm(f):
+            if f is None:
+                return 0.0
+            g, = torch.autograd.grad(f(p), p, allow_unused=True)
+            return float(g.abs().sum()) if g is not None else 0.0
+        wl = norm(self.op_collections.wirelength_op)
+        sc = norm(self.op_collections.segment_clearance_op) if self.segment_clearance_weight > 0 else 0.0
+        nc = norm(self.op_collections.net_crossing_op) if self.net_crossing_weight > 0 else 0.0
+        self.segment_clearance_scale = wl / sc if sc > 0 else 0.0
+        self.net_crossing_scale = wl / nc if nc > 0 else 0.0
+        logging.info("segment terms scaled to wirelength: gradients wirelength %.4g, clearance %.4g, crossing %.4g"
+                     % (wl, sc, nc))
+
     def obj_fn(self, pos, orient_logits=None):
         """
         @brief Compute objective.
@@ -460,9 +507,21 @@ class PlaceObj(nn.Module):
                 if not math.isnan(nc_grad_norm):
                     result = torch.add(result, self.net_crossing, alpha=nc_grad_scale * self.net_crossing_weight)
                 
-            else:
+            elif not self.params.segment_clearance_file:
                 # result = torch.add(result, self.net_crossing, alpha=(self.density_factor * self.density_weight).item())
                 result = torch.add(result, self.net_crossing, alpha=self.net_crossing_weight)
+            elif self.segment_terms_on() and self.net_crossing_weight > 0:
+                self.scale_segment_terms(pos)
+                result = torch.add(result, self.net_crossing, alpha=self.net_crossing_weight * self.net_crossing_scale)
+
+        if self.op_collections.segment_clearance_op is not None and self.segment_clearance_weight > 0 and self.segment_terms_on():
+            self.scale_segment_terms(pos)
+            self.segment_clearance = self.op_collections.segment_clearance_op(pos)
+            # ramp in over segment_terms_ramp evaluations: a term switched on at full weight changes the gradient
+            # abruptly, and the optimizer's step, estimated from the last step's change in gradient, overshoots
+            self.segment_terms_calls = getattr(self, "segment_terms_calls", 0) + 1
+            ramp = min(1.0, self.segment_terms_calls / max(1, self.params.segment_terms_ramp))
+            result = torch.add(result, self.segment_clearance, alpha=self.segment_clearance_weight * self.segment_clearance_scale * ramp)
 
         if orient_logits is not None:
             return result
@@ -800,10 +859,21 @@ class PlaceObj(nn.Module):
         # }
 
 
+        net_mask = data_collections.net_mask_ignore_large_degrees
+        if params.segment_clearance_file and params.net_crossing_segment_nets_only:
+            # edaroute: count crossings only among the nets the segments file names (RF hops, escapes) and clocks
+            import json
+            doc = json.load(open(params.segment_clearance_file))
+            names = set(doc.get("crossing_nets", [])) or {sg["net"] for sg in doc["segments"]}
+            keep = np.zeros(len(placedb.net_names), dtype=np.uint8)
+            for i, nm in enumerate(placedb.net_names):
+                keep[i] = (nm.decode() if isinstance(nm, bytes) else str(nm)) in names
+            net_mask = net_mask * torch.from_numpy(keep).to(net_mask)
+            logging.info("net crossing: %d of %d nets" % (int(net_mask.sum()), len(keep)))
         return net_crossing.NetCrossing(
             flat_netpin=data_collections.flat_net2pin_map,
             netpin_start=data_collections.flat_net2pin_start_map,
-            net_mask=data_collections.net_mask_ignore_large_degrees,
+            net_mask=net_mask,
             pin_side=pin_side,
             _lambda=torch.tensor(2, dtype=dtype, device=device),
             _mu=torch.tensor(2, dtype=dtype, device=device),

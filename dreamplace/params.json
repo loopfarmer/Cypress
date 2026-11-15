@@ -263,6 +263,26 @@
         "description": "with enable_rotation, when global placement ends, passes giving each part the quarter turn that minimizes its nets' wirelength; 0 for none",
         "default": 3
     },
+    "segment_clearance_file": {
+        "description": "a segments JSON (edaroute export --segments): RF hops and IC escapes to keep other pins clear of; empty for none",
+        "default": ""
+    },
+    "segment_clearance_weight": {
+        "description": "weight of the segment-clearance term in the objective; 0 computes nothing",
+        "default": 0.0
+    },
+    "segment_terms_start_overflow": {
+        "description": "with segment_clearance_file, the segment-clearance and net-crossing terms start once overflow falls below this",
+        "default": 0.2
+    },
+    "segment_terms_ramp": {
+        "description": "with segment_clearance_file, objective evaluations over which the segment-clearance term ramps from 0 to its weight",
+        "default": 200
+    },
+    "net_crossing_segment_nets_only": {
+        "description": "with segment_clearance_file, count net crossings only among the nets it names (RF hops, escapes, clocks)",
+        "default": 1
+    },
     "legalize_max_overflow": {
         "description": "legalize a global placement that ends above stop_overflow, up to this overflow; above it, or on divergence, placement fails",
         "default": 0.07
