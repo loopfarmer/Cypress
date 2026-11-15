@@ -396,7 +396,7 @@ class NonLinearPlace(BasicPlace.BasicPlace):
                             % (model.macro_overlap_weight.data)
                         )
 
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=False)  # edaroute: PyTorch 2 defaults to None, and the Nesterov step skips a None grad
 
                     update_orient_cond = (
                         iteration >= 500 and iteration % 100 == 0
