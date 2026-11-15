@@ -10,6 +10,9 @@
 // local dependency
 #include "electric_potential/src/atomic_ops.h"
 #include "electric_potential/src/density_function.h"
+#include <omp.h>
+#include <algorithm>
+#include <memory>
 
 DREAMPLACE_BEGIN_NAMESPACE
 
@@ -274,11 +277,25 @@ int computeTriangleDensityMapLauncher(
 
   T inv_bin_size_x = 1.0 / bin_size_x;
   T inv_bin_size_y = 1.0 / bin_size_y;
+  // edaroute: each thread adds into its own map, and the maps are summed into buf_map at the end. Every cell, fillers
+  // included (over half a million on small-9), adds to several bins, and as atomics those adds stopped the op scaling
+  // past 4 threads. A private map costs a pass to zero it and one to sum it, so it's used only when the cells' adds
+  // (at least 4 each) outnumber the bins of all the maps. Otherwise, and always on one thread, the op runs as before.
+  // The split is static, so for a given thread count the sums come out the same every run.
+  typedef typename AtomicOp::type V;
+  const size_t num_bins = (size_t)num_bins_x * num_bins_y;
+  const bool private_maps = num_threads > 1 && (size_t)num_nodes * 4 >= num_bins * num_threads;
+  std::unique_ptr<V[]> priv(private_maps ? new V[num_bins * num_threads] : nullptr);
+
   // do not use dynamic scheduling for determinism
-  // int chunk_size =
-  // DREAMPLACE_STD_NAMESPACE::max(int(num_nodes/num_threads/16), 1);
-#pragma omp parallel for num_threads( \
-    num_threads)  // schedule(dynamic, chunk_size)
+#pragma omp parallel num_threads(num_threads)
+  {
+  V* mine = nullptr;
+  if (private_maps) {
+    mine = priv.get() + omp_get_thread_num() * num_bins;
+    std::fill(mine, mine + num_bins, V(0));
+  }
+#pragma omp for schedule(static)
   for (int i = 0; i < num_nodes; ++i) {
     // use stretched node size
     T node_size_x = node_size_x_clamped_tensor[i];
@@ -309,9 +326,25 @@ int computeTriangleDensityMapLauncher(
             triangle_density_function(node_y, node_size_y, yl, h, bin_size_y);
         T area = px_by_ratio * py;
 
-        atomic_add_op(&buf_map[k * num_bins_y + h], area);
+        if (mine) {
+          atomic_add_op.add(&mine[k * num_bins_y + h], area);
+        } else {
+          atomic_add_op(&buf_map[k * num_bins_y + h], area);
+        }
       }
     }
+  }
+
+  if (private_maps) {
+    // Threads the runtime didn't start have no map to add.
+    const int started = omp_get_num_threads();
+#pragma omp for schedule(static)
+    for (size_t b = 0; b < num_bins; ++b) {
+      V sum = 0;
+      for (int t = 0; t < started; ++t) sum += priv[t * num_bins + b];
+      buf_map[b] += sum;
+    }
+  }
   }
 
   return 0;

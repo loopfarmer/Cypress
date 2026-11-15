@@ -23,6 +23,12 @@ struct AtomicAdd {
 #pragma omp atomic
     *dst += v;
   }
+
+  /// edaroute: the same addition, not atomic, for a buffer only one thread writes
+  template <typename V>
+  inline void add(type* dst, V v) const {
+    *dst += v;
+  }
 };
 
 /// @brief For atomic addition of fixed point number using integers.
@@ -41,6 +47,12 @@ struct AtomicAdd<T, true> {
     type sv = v * scale_factor;
 #pragma omp atomic
     *dst += sv;
+  }
+
+  /// edaroute: the same addition, not atomic, for a buffer only one thread writes
+  template <typename V>
+  inline void add(type* dst, V v) const {
+    *dst += (type)(v * scale_factor);
   }
 };
 
