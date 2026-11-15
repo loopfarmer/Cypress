@@ -1,3 +1,44 @@
+# Cypress, maintained
+
+This is a fork of [NVlabs/Cypress](https://github.com/NVlabs/Cypress), which hasn't moved since its ISPD 2025 release. It's kept for [edaroute](https://github.com/loopfarmer/edaroute) and changes Cypress in three ways:
+
+- **Current software:** it builds and runs on PyTorch 2, Python 3.11 or later, NumPy 2 and C++17.
+- **Macs:** it builds on macOS, including Apple silicon, CPU-only.
+- **CPU ops:** the CPU pin-position and net-crossing ops have caught up with the CUDA ones. Their CPU versions had fallen behind and no longer ran.
+
+The commit messages say what changed and why. Upstream's README follows below.
+
+## Build on macOS, CPU-only
+
+```bash
+brew install cmake boost bison flex libomp cairo
+git clone --recursive https://github.com/loopfarmer/Cypress.git && cd Cypress
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
+mkdir build && cd build
+cmake .. -DPYTHON_EXECUTABLE=$PWD/../.venv/bin/python && make -j && make install
+```
+
+CMake finds Homebrew's bison, flex and libomp by itself.
+
+## Run on macOS
+
+```bash
+cd install
+DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib KMP_DUPLICATE_LIB_OK=TRUE ../.venv/bin/python dreamplace/Placer.py config.json
+```
+
+Set `"gpu": 0` in the config.
+
+- **`DYLD_FALLBACK_LIBRARY_PATH`** lets cairocffi find Homebrew's cairo. macOS strips it from any program under `/usr/bin`, so don't run the placer through `/usr/bin/time`.
+- **`KMP_DUPLICATE_LIB_OK`** is needed because PyTorch and Homebrew each load an OpenMP runtime.
+
+### Limits on CPU
+
+- **No rotation.** The CPU op doesn't rotate parts, so keep `enable_rotation` at 0.
+- **Runs aren't repeatable.** With more than one thread, floating-point sums land in a different order each run, so two runs with the same seed can differ.
+
+---
+
 # Cypress: VLSI-Inspired Scalable GPU-Accelerated PCB Placement
 
 Cypress is a scalable, GPU-accelerated PCB placement method inspired by VLSI. It incorporates
